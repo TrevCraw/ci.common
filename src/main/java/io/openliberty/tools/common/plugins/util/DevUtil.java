@@ -250,6 +250,13 @@ public abstract class DevUtil {
      */
     public abstract String getServerStartTimeoutExample();
 
+    /**
+     * Check to see if the user has created any custom properties.
+     *
+     * @return true, if custom properties exist in the project, otherwise returns false
+     */
+    public abstract boolean customPropsCheck();
+
     private enum FileTrackMode {
         NOT_SET, FILE_WATCHER, POLLING
     }
@@ -301,6 +308,7 @@ public abstract class DevUtil {
     private File defaultDockerfile;
     protected List<String> srcMount = new ArrayList<String>();
     protected List<String> destMount = new ArrayList<String>();
+    private boolean pluginConfigToBeMounted = false;
 
     public DevUtil(File serverDirectory, File sourceDirectory, File testSourceDirectory, File configDirectory, File projectDirectory,
             List<File> resourceDirs, boolean hotTests, boolean skipTests, boolean skipUTs, boolean skipITs,
@@ -537,6 +545,10 @@ public abstract class DevUtil {
                 } else {
                     // this message is mainly for the default dockerfile scenario, since the dockerfile parameter was already validated in Maven/Gradle plugin.
                     throw new PluginExecutionException("No Dockerfile was found at " + dockerfileToUse.getAbsolutePath() + ". Create a Dockerfile at the specified location to use dev mode with container support. For an example of how to configure a Dockerfile, see https://github.com/OpenLiberty/ci.docker");
+                }
+                if(!pluginConfigToBeMounted && customPropsCheck()) {
+                    warn("Custom project properties have been discovered. The liberty-plugin-variable-config.xml file located in " + serverDirectory + 
+                         "/configDropins/overrides should be copied in the Dockerfile to ensure this application works in production.");
                 }
             }
 
@@ -874,6 +886,19 @@ public abstract class DevUtil {
     }
 
     private boolean isMountableSource(File srcMountFile) throws PluginExecutionException {
+        // First, check to see if this source file is the generated plugin variable config XML, or one of the folders that contains it
+        try {
+            if (!pluginConfigToBeMounted && (srcMountFile.getName().equals("liberty-plugin-variable-config.xml")
+                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath() + "/configDropins/overrides")
+                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath() + "/configDropins")
+                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath()))) {
+                pluginConfigToBeMounted = true;
+            }
+        } catch (IOException e) {
+            // TODO How should we handle this exception?
+            e.printStackTrace();
+        }
+        // If the source file is a directory, do not mount it for hot deployment
         if (srcMountFile.isDirectory()) {
             warn("Files in the directory " + srcMountFile + " will not be able to be hot deployed to the dev mode container. " +
                 "Dev mode does not currently support hot deployment with directories specified in the COPY command. " + 
@@ -1092,24 +1117,21 @@ public abstract class DevUtil {
         command.append(" -v " + serverDirectory + "/apps:/config/apps");
         command.append(" -v " + serverDirectory + "/dropins:/config/dropins");
 
-        boolean generatedConfigMounted = false;
-        // mount all files from COPY commands in the Dockerfile to allow for hot deployment
-        for (int i=0; i < srcMount.size(); i++) {
-            command.append(" -v " + srcMount.get(i) + ":" + destMount.get(i));
-            if (srcMount.get(i).endsWith("liberty-plugin-variable-config.xml")) {
-                generatedConfigMounted = true;
-            }
-        }
-
         // mount the loose application resources in the container
         command.append(" -v " + projectDirectory.getAbsolutePath() + ":" + DEVMODE_DIR_NAME);
-        if (!generatedConfigMounted) {
+        if (!pluginConfigToBeMounted) {
+            // the plugin config must be mounted to the container in order for loose application to work
             command.append(" -v " + serverDirectory.getAbsolutePath() + "/configDropins/overrides/liberty-plugin-variable-config.xml" +
                            ":/config/configDropins/overrides/liberty-plugin-variable-config.xml");
         }
 
         // mount the server logs directory over the /logs used by the open liberty container as defined by the LOG_DIR env. var.
         command.append(" -v " + serverDirectory.getAbsolutePath() + "/logs:/logs");
+
+        // mount all files from COPY commands in the Dockerfile to allow for hot deployment
+        for (int i=0; i < srcMount.size(); i++) {
+            command.append(" -v " + srcMount.get(i) + ":" + destMount.get(i));
+        }
 
         command.append(" --name " + DEVMODE_CONTAINER_NAME);
 
