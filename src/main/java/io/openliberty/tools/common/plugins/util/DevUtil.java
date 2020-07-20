@@ -308,7 +308,7 @@ public abstract class DevUtil {
     private File defaultDockerfile;
     protected List<String> srcMount = new ArrayList<String>();
     protected List<String> destMount = new ArrayList<String>();
-    private boolean pluginConfigToBeMounted = false;
+    private boolean pluginConfigCopied = false;
 
     public DevUtil(File serverDirectory, File sourceDirectory, File testSourceDirectory, File configDirectory, File projectDirectory,
             List<File> resourceDirs, boolean hotTests, boolean skipTests, boolean skipUTs, boolean skipITs,
@@ -546,7 +546,7 @@ public abstract class DevUtil {
                     // this message is mainly for the default dockerfile scenario, since the dockerfile parameter was already validated in Maven/Gradle plugin.
                     throw new PluginExecutionException("No Dockerfile was found at " + dockerfileToUse.getAbsolutePath() + ". Create a Dockerfile at the specified location to use dev mode with container support. For an example of how to configure a Dockerfile, see https://github.com/OpenLiberty/ci.docker");
                 }
-                if(!pluginConfigToBeMounted && customPropsCheck()) {
+                if(!pluginConfigCopied && customPropsCheck()) {
                     warn("Custom project properties have been discovered. The liberty-plugin-variable-config.xml file located in " + serverDirectory + 
                          "/configDropins/overrides should be copied in the Dockerfile to ensure this application works in production.");
                 }
@@ -870,11 +870,15 @@ public abstract class DevUtil {
                     String dest = srcOrDestArguments.get(srcOrDestArguments.size() - 1);
                     List<String> srcArguments = srcOrDestArguments.subList(0, srcOrDestArguments.size() - 1);
                     for (String src : srcArguments) {
+                        File srcFile = new File(buildContext + "/" + src);
+                        if (!pluginConfigCopied) {
+                            checkForPluginConfig(srcFile);
+                        }
                         if (src.contains("*") || src.contains("?")) {
                             warn("The COPY source " + src + " in the Dockerfile line '" + line + "' will not be able to be hot deployed to the dev mode container. Dev mode does not currently support wildcards in the COPY command.");
-                        } else if (isMountableSource(new File(buildContext + "/" + src))) {
+                        } else if (isMountableSource(srcFile)) {
                             String srcMountString = buildContext + "/" + src;
-                            String destMountString = formatDestMount(dest, new File(buildContext + "/" + src));
+                            String destMountString = formatDestMount(dest, srcFile);
                             srcMount.add(srcMountString);
                             destMount.add(destMountString);
                             debug("COPY line=" + line + ", src=" + srcMountString + ", dest=" + destMountString);
@@ -885,19 +889,26 @@ public abstract class DevUtil {
         }
     }
 
-    private boolean isMountableSource(File srcMountFile) throws PluginExecutionException {
-        // First, check to see if this source file is the generated plugin variable config XML, or one of the folders that contains it
+    private void checkForPluginConfig(File srcFile) {
+        // check to see if this source file is the generated plugin variable config XML, or one of the folders that contains it
+        // TODO: Instead of this method, create a plugin config file reference and use startsWith()
         try {
-            if (!pluginConfigToBeMounted && (srcMountFile.getName().equals("liberty-plugin-variable-config.xml")
-                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath() + "/configDropins/overrides")
-                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath() + "/configDropins")
-                    || srcMountFile.getCanonicalPath().equals(serverDirectory.getCanonicalPath()))) {
-                pluginConfigToBeMounted = true;
+            String srcFileCanonicalPath = srcFile.getCanonicalPath();
+            // currently, this line causes unit tests to fail because serverDirectory is null
+            String serverDirCanonicalPath = serverDirectory.getCanonicalPath();
+            if (srcFile.getName().equals("liberty-plugin-variable-config.xml")
+                || srcFileCanonicalPath.equals(serverDirCanonicalPath + "/configDropins/overrides")
+                || srcFileCanonicalPath.equals(serverDirCanonicalPath + "/configDropins")
+                || srcFileCanonicalPath.equals(serverDirCanonicalPath)) {
+                pluginConfigCopied = true;
             }
         } catch (IOException e) {
             // TODO How should we handle this exception?
             e.printStackTrace();
         }
+    }
+
+    private boolean isMountableSource(File srcMountFile) throws PluginExecutionException {
         // If the source file is a directory, do not mount it for hot deployment
         if (srcMountFile.isDirectory()) {
             warn("Files in the directory " + srcMountFile + " will not be able to be hot deployed to the dev mode container. " +
@@ -1119,7 +1130,7 @@ public abstract class DevUtil {
 
         // mount the loose application resources in the container
         command.append(" -v " + projectDirectory.getAbsolutePath() + ":" + DEVMODE_DIR_NAME);
-        if (!pluginConfigToBeMounted) {
+        if (!pluginConfigCopied) {
             // the plugin config must be mounted to the container in order for loose application to work
             command.append(" -v " + serverDirectory.getAbsolutePath() + "/configDropins/overrides/liberty-plugin-variable-config.xml" +
                            ":/config/configDropins/overrides/liberty-plugin-variable-config.xml");
