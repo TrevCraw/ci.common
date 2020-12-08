@@ -577,6 +577,11 @@ public abstract class DevUtil {
      */
     public void startServer(boolean buildContainer, boolean pullParentImage) throws PluginExecutionException {
         try {
+            // check for container running this project before starting up the server/container
+            if(isContainerRunning()) {
+                throw new PluginExecutionException("Dev mode is already running this project in a Liberty container. Stop the running dev mode container instance to run a new instance of dev mode.");
+            }
+            // check for local server here?
             final ServerTask serverTask;
             try {
                 serverTask = getServerTask();
@@ -773,6 +778,37 @@ public abstract class DevUtil {
         if (curVer.compareTo(minVer) < 0) {
             throw new PluginExecutionException("The detected Docker client version number is not supported:" + dockerVersion.trim() + ". Docker version must be 18.03.00 or higher.");
         }
+    }
+
+    /**
+     * Check to see if a dev mode container is running using the current project.
+     */
+    private boolean isContainerRunning() throws PluginExecutionException {
+        String dockerContNamesCmd = "docker ps -a --format \"{{.Names}}\"";
+        String result = execDockerCmd(dockerContNamesCmd, 10, false);
+        if (result == null || result == "" || result.contains(" RC=")) { // No containers found
+            debug("No containers found.");
+            return false;
+        }
+        String[] containerNames = result.split(" ");
+        String retrieveMountCmd = "docker inspect -f '{{.Mounts}}' ";
+        for(int i = 0; i < containerNames.length; i++) {
+            String mountResult = execDockerCmd(retrieveMountCmd + containerNames[i].trim(), 10, false);
+            if (mountResult == null || mountResult.contains(" RC=")) { // RC is added in execDockerCmd if there is an error
+                debug("Unable to retrieve mounted files for container: " + containerNames[i]);
+                continue;
+            }
+            List<String> mountSegments = Arrays.asList(mountResult.split(" "));
+            int devModeDirIndex = mountSegments.indexOf(DEVMODE_DIR_NAME);
+            if (devModeDirIndex > 0) { // ensures indexOf() did not return -1 and that the index one below devModeDirIndex will not result in an out of bounds exception
+                String projectName = mountSegments.get(devModeDirIndex - 1).trim();
+                debug("Container project name: " + projectName);
+                if (projectName.equals(projectDirectory.getAbsolutePath())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private File getDockerfile() {
