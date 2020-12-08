@@ -782,8 +782,9 @@ public abstract class DevUtil {
 
     /**
      * Check to see if a dev mode container is running using the current project.
+     * @return true if a container is found to be already running with this project; false otherwise
      */
-    private boolean isContainerRunning() throws PluginExecutionException {
+    private boolean isContainerRunning() {
         String dockerContNamesCmd = "docker ps -a --format \"{{.Names}}\"";
         String result = execDockerCmd(dockerContNamesCmd, 10, false);
         if (result == null || result == "" || result.contains(" RC=")) { // No containers found
@@ -798,17 +799,27 @@ public abstract class DevUtil {
                 debug("Unable to retrieve mounted files for container: " + containerNames[i]);
                 continue;
             }
-            List<String> mountSegments = Arrays.asList(mountResult.split(" "));
-            int devModeDirIndex = mountSegments.indexOf(DEVMODE_DIR_NAME);
-            if (devModeDirIndex > 0) { // ensures indexOf() did not return -1 and that the index one below devModeDirIndex will not result in an out of bounds exception
-                String projectName = mountSegments.get(devModeDirIndex - 1).trim();
-                debug("Container project name: " + projectName);
-                if (projectName.equals(projectDirectory.getAbsolutePath())) {
-                    return true;
-                }
+            String projectName = parseMounts(mountResult);
+            debug("Container project name: " + projectName);
+            if (projectName.equals(projectDirectory.getAbsolutePath())) {
+                return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Find the dev mode project directory inside the container mount results
+     * @param mountResult String containing the mounts from a container
+     * @return String containing the container's project name or empty string if it is not a dev mode container
+     */
+    protected static String parseMounts(String mountResult) { 
+        List<String> mountSegments = Arrays.asList(mountResult.split(" "));
+        int devModeDirIndex = mountSegments.indexOf(DEVMODE_DIR_NAME); // the project directory is mounted to DEVMODE_DIR_NAME if it is a dev mode container
+        if (devModeDirIndex > 0) { // ensures indexOf() did not return -1 and that the index one below devModeDirIndex will not result in an out of bounds exception
+            return mountSegments.get(devModeDirIndex - 1).trim();
+        }
+        return "";
     }
 
     private File getDockerfile() {

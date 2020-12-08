@@ -485,4 +485,33 @@ public class DevUtilTest extends BaseDevUtilTest {
         assertArrayEquals(null, DevUtil.parseNetworks(""));
     }
 
+    @Test
+    public void testParseMounts() {
+        final String DEVMODE_DIR_NAME = "/devmode";
+        String projectName = "C:\\Users\\User\\Git\\dev-mode";
+        String devModeContainerMounts = "[{bind  C:\\Users\\User\\Git\\dev-mode\\target\\liberty\\wlp\\usr\\servers\\defaultServer/logs /logs   true rprivate} " +
+            "{bind  C:\\Users\\User\\Git\\dev-mode/target/liberty/wlp/usr/servers/defaultServer/bootstrap.properties /config/bootstrap.properties   " +
+            "true rprivate} {bind  " + projectName + " " + DEVMODE_DIR_NAME + "   true rprivate} {bind  C:\\Users\\User\\Git\\dev-mode\\target" +
+            "\\liberty\\wlp\\usr\\servers\\defaultServer/configDropins/overrides/dev-mode-config.xml /config/configDropins/overrides/dev-mode-config.xml   " +
+            "true rprivate} {bind  C:\\Users\\User\\Git\\dev-mode/src/testFile.txt /configDropins/overrides/testFile.txt   true rprivate} {bind  C:\\Users\\User" +
+            "\\Git\\dev-mode/src/fooFile.txt /configDropins/overrides/fooFile.txt   true rprivate} {bind  C:\\Users\\User\\Git\\dev-mode\\target" +
+            "\\liberty\\wlp\\usr\\servers\\defaultServer/apps /config/apps   true rprivate} {bind  C:\\Users\\User\\Git\\dev-mode/target/liberty/wlp/usr/servers" +
+            "/defaultServer/server.xml /config/server.xml   true rprivate} {bind  C:\\Users\\User\\Git\\dev-mode/target/liberty/wlp/usr/servers/defaultServer" +
+            "/configDropins/overrides/liberty-plugin-variable-config.xml /config/configDropins/overrides/liberty-plugin-variable-config.xml   true rprivate} " +
+            "{bind  C:\\Users\\User\\Git\\dev-mode\\target\\liberty\\wlp\\usr\\servers\\defaultServer/dropins /config/dropins   true rprivate}]";
+        
+        
+        
+        assertEquals(projectName, DevUtil.parseMounts(devModeContainerMounts));
+        assertEquals("", DevUtil.parseMounts(""));
+        assertEquals("", DevUtil.parseMounts(" "));
+        assertEquals("", DevUtil.parseMounts("[]"));
+        assertEquals("", DevUtil.parseMounts("[{nonsense}]"));
+        assertEquals("", DevUtil.parseMounts(DEVMODE_DIR_NAME));
+        assertEquals("", DevUtil.parseMounts(DEVMODE_DIR_NAME + " " + projectName));
+        assertEquals("", DevUtil.parseMounts(projectName + " " + DEVMODE_DIR_NAME + "/suffix"));
+        assertEquals("", DevUtil.parseMounts(projectName + " prefix" + DEVMODE_DIR_NAME));
+        assertEquals(projectName, DevUtil.parseMounts(projectName + " " + DEVMODE_DIR_NAME));
+    }
+
 }
