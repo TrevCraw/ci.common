@@ -500,8 +500,6 @@ public class DevUtilTest extends BaseDevUtilTest {
             "/configDropins/overrides/liberty-plugin-variable-config.xml /config/configDropins/overrides/liberty-plugin-variable-config.xml   true rprivate} " +
             "{bind  C:\\Users\\User\\Git\\dev-mode\\target\\liberty\\wlp\\usr\\servers\\defaultServer/dropins /config/dropins   true rprivate}]";
         
-        
-        
         assertEquals(projectName, DevUtil.parseMounts(devModeContainerMounts));
         assertEquals("", DevUtil.parseMounts(""));
         assertEquals("", DevUtil.parseMounts(" "));

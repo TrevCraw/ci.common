@@ -577,11 +577,9 @@ public abstract class DevUtil {
      */
     public void startServer(boolean buildContainer, boolean pullParentImage) throws PluginExecutionException {
         try {
-            // check for container running this project before starting up the server/container
-            if(isContainerRunning()) {
-                throw new PluginExecutionException("Dev mode is already running this project in a Liberty container. Stop the running dev mode container instance to run a new instance of dev mode.");
+            if (checkDockerVersion() && isContainerRunning()) {
+                throw new PluginExecutionException("Dev mode is already running this project in a Liberty container. Stop the running dev mode container instance before starting a new instance of dev mode (regular or container mode).");
             }
-            // check for local server here?
             final ServerTask serverTask;
             try {
                 serverTask = getServerTask();
@@ -591,10 +589,6 @@ public abstract class DevUtil {
 
             // Set debug variables in server.env if debug enabled
             enableServerDebug();
-
-            if (container) {
-                checkDockerVersion();
-            }
 
             // build Docker image if in container mode
             if (container && buildContainer) {
@@ -763,21 +757,37 @@ public abstract class DevUtil {
     /**
      * Retrieve the current docker version and compare to a known value.
      * The Maven class ComparableVersion allows for numbers, letters and certain words.
-     * Throw an exception if there is a problem with the version.
+     * Throw an exception if in container mode and there is a problem with the Docker version or Docker is not found.
+     * @return true if the Docker version is valid; false if invalid
      */
     private static final String MIN_DOCKER_VERSION = "18.03.00"; // Must use Docker 18.03.00 or higher
-    private void checkDockerVersion() throws PluginExecutionException {
+    private static final String CMD_NOT_FOUND_CODE_WIN = "9009"; // Command not found exit code for Windows
+    private static final String CMD_NOT_FOUND_CODE_SH = "127"; // Command not found exit code for bash (Linux/macOS) and zsh (macOS)
+    private boolean checkDockerVersion() throws PluginExecutionException {
         String versionCmd = "docker version --format {{.Client.Version}}";
         String dockerVersion = execDockerCmd(versionCmd, 10);
         if (dockerVersion == null) {
-            return; // can't tell if the version is valid.
+            return true; // can't tell if the version is valid, so assume it is
+        }
+        if (dockerVersion.contains(" RC=")) {
+            String errorCode = dockerVersion.split("RC=")[1].trim();
+            if ((errorCode == CMD_NOT_FOUND_CODE_WIN && OSUtil.isWindows()) || (errorCode == CMD_NOT_FOUND_CODE_SH && !OSUtil.isWindows())) {
+                if (container) {
+                    throw new PluginExecutionException("Docker is not installed or is not located in the System PATH. Install Docker and/or add it to the System PATH to run dev mode in container mode.");
+                }
+                return false;
+            }
         }
         debug("Detected Docker version >" + dockerVersion);
         ComparableVersion minVer = new ComparableVersion(MIN_DOCKER_VERSION);
         ComparableVersion curVer = new ComparableVersion(dockerVersion);
         if (curVer.compareTo(minVer) < 0) {
-            throw new PluginExecutionException("The detected Docker client version number is not supported:" + dockerVersion.trim() + ". Docker version must be 18.03.00 or higher.");
+            if (container) {
+                throw new PluginExecutionException("The detected Docker client version number is not supported:" + dockerVersion.trim() + ". Docker version must be 18.03.00 or higher.");
+            }
+            return false;
         }
+        return true;
     }
 
     /**
@@ -787,7 +797,7 @@ public abstract class DevUtil {
     private boolean isContainerRunning() {
         String dockerContNamesCmd = "docker ps -a --format \"{{.Names}}\"";
         String result = execDockerCmd(dockerContNamesCmd, 10, false);
-        if (result == null || result == "" || result.contains(" RC=")) { // No containers found
+        if (result == null || result == "" || result.contains(" RC=")) { // RC is added in execDockerCmd if there is an error
             debug("No containers found.");
             return false;
         }
