@@ -1363,7 +1363,11 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
     }
 
     private String execDockerCmd(String command, int timeout) {
-        return execDockerCmd(command, timeout, true);
+        return execDockerCmd(command, timeout, true, container);
+    }
+
+    private String execDockerCmd(String command, int timeout, boolean throwExceptionOnError) {
+        return execDockerCmd(command, timeout, throwExceptionOnError, container);
     }
 
     /**

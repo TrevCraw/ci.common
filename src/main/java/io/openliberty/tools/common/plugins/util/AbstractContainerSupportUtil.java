@@ -25,7 +25,7 @@ public abstract class AbstractContainerSupportUtil {
      * @param timeout unit is seconds
      * @return the stdout of the command or null for no output on stdout
      */
-    protected String execDockerCmd(String command, int timeout, boolean throwExceptionOnError) {
+    protected String execDockerCmd(String command, int timeout, boolean throwExceptionOnError, boolean container) {
         String result = null;
         try {
             debug("execDocker, timeout=" + timeout + ", cmd=" + command);
@@ -50,15 +50,21 @@ public abstract class AbstractContainerSupportUtil {
         } catch (IllegalThreadStateException  e) {
             // the timeout was too short and the docker command has not yet completed. There is no exit value.
             debug("IllegalThreadStateException, message="+e.getMessage());
-            error("The docker command did not complete within the timeout period: " + timeout + " seconds.", e);
+            if (container) {
+                error("The docker command did not complete within the timeout period: " + timeout + " seconds.", e);
+            }
             throw new RuntimeException("The docker command did not complete within the timeout period: " + timeout + " seconds. ");
         } catch (InterruptedException e) {
             // If a runtime exception occurred in the server task, log and rethrow
-            error("An interruption error occurred while running a docker command: " + e.getMessage(), e);
+            if (container) {
+                error("An interruption error occurred while running a docker command: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e.getMessage());
         } catch (IOException e) {
             // If a runtime exception occurred in the server task, log and rethrow
-            error("An error occurred while running a docker command: " + e.getMessage(), e);
+            if (container) {
+                error("An error occurred while running a docker command: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e.getMessage());
         }
         return result;
