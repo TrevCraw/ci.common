@@ -761,22 +761,24 @@ public abstract class DevUtil {
      * @return true if the Docker version is valid; false if invalid
      */
     private static final String MIN_DOCKER_VERSION = "18.03.00"; // Must use Docker 18.03.00 or higher
-    private static final String CMD_NOT_FOUND_CODE_WIN = "9009"; // Command not found exit code for Windows
-    private static final String CMD_NOT_FOUND_CODE_SH = "127"; // Command not found exit code for bash (Linux/macOS) and zsh (macOS)
     private boolean checkDockerVersion() throws PluginExecutionException {
         String versionCmd = "docker version --format {{.Client.Version}}";
-        String dockerVersion = execDockerCmd(versionCmd, 10);
-        if (dockerVersion == null) {
-            return true; // can't tell if the version is valid, so assume it is
-        }
-        if (dockerVersion.contains(" RC=")) {
-            String errorCode = dockerVersion.split("RC=")[1].trim();
-            if ((errorCode == CMD_NOT_FOUND_CODE_WIN && OSUtil.isWindows()) || (errorCode == CMD_NOT_FOUND_CODE_SH && !OSUtil.isWindows())) {
+        String dockerVersion = null;
+        try {
+            dockerVersion = execDockerCmd(versionCmd, 10);
+        } catch (RuntimeException e) {
+            // This IOException error message means the program invoked was not found in PATH
+            if (e.getMessage().contains("CreateProcess error=2")) {
                 if (container) {
                     throw new PluginExecutionException("Docker is not installed or is not located in the System PATH. Install Docker and/or add it to the System PATH to run dev mode in container mode.");
                 }
                 return false;
+            } else {
+                throw new RuntimeException(e.getMessage());
             }
+        }
+        if (dockerVersion == null) {
+            return true; // can't tell if the version is valid, so assume it is
         }
         debug("Detected Docker version >" + dockerVersion);
         ComparableVersion minVer = new ComparableVersion(MIN_DOCKER_VERSION);
@@ -1332,15 +1334,21 @@ public abstract class DevUtil {
         } catch (IllegalThreadStateException  e) {
             // the timeout was too short and the docker command has not yet completed. There is no exit value.
             debug("IllegalThreadStateException, message="+e.getMessage());
-            error("The docker command did not complete within the timeout period: " + timeout + " seconds.", e);
+            if (container) {
+                error("The docker command did not complete within the timeout period: " + timeout + " seconds.", e);
+            }
             throw new RuntimeException("The docker command did not complete within the timeout period: " + timeout + " seconds. ");
         } catch (InterruptedException e) {
             // If a runtime exception occurred in the server task, log and rethrow
-            error("An interruption error occurred while running a docker command: " + e.getMessage(), e);
+            if (container) {
+                error("An interruption error occurred while running a docker command: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e.getMessage());
         } catch (IOException e) {
             // If a runtime exception occurred in the server task, log and rethrow
-            error("An error occurred while running a docker command: " + e.getMessage(), e);
+            if (container) {
+                error("An error occurred while running a docker command: " + e.getMessage(), e);
+            }
             throw new RuntimeException(e.getMessage());
         }
         return result;
