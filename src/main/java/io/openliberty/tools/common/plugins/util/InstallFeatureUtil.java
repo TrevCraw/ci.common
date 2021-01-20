@@ -911,7 +911,7 @@ public abstract class InstallFeatureUtil extends ServerFeatureUtil {
             featureUtilityCommand += "--acceptLicense";
         }
         
-        String cmdResult = execDockerCmd(featureUtilityCommand, 600, false);
+        String cmdResult = execDockerCmd(featureUtilityCommand, 600, false, true);
         if (cmdResult.contains(" RC=")) { // This piece of the string is added in execDockerCmd if there is an error
             if (cmdResult.contains("CWWKF1250I")) {
                 // The features are already installed message
