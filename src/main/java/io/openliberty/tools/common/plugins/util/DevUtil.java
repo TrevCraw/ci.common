@@ -339,9 +339,11 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
     private Set<WatchKey> dockerfileDirectoriesWatchKeys = new HashSet<WatchKey>();
     private Set<FileAlterationObserver> dockerfileDirectoriesFileObservers = new HashSet<FileAlterationObserver>();
     private final JavaCompilerOptions compilerOptions;
-    private boolean shownFeaturesShWarning = false;
     private final String mavenCacheLocation;
     private AtomicBoolean externalContainerShutdown;
+    private AtomicBoolean shownFeaturesShWarning;
+    protected AtomicBoolean hasFeaturesSh;
+    protected AtomicBoolean serverFullyStarted;
 
     public DevUtil(File serverDirectory, File sourceDirectory, File testSourceDirectory, File configDirectory, File projectDirectory,
             List<File> resourceDirs, boolean hotTests, boolean skipTests, boolean skipUTs, boolean skipITs,
@@ -396,6 +398,9 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         this.keepTempDockerfile = keepTempDockerfile;
         this.mavenCacheLocation = mavenCacheLocation;
         this.externalContainerShutdown = new AtomicBoolean(false);
+        this.shownFeaturesShWarning = new AtomicBoolean(false);
+        this.hasFeaturesSh = new AtomicBoolean(false);
+        this.serverFullyStarted = new AtomicBoolean(false);
     }
 
     /**
@@ -747,6 +752,8 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
                 throw new PluginExecutionException("The server has not started within " + serverStartTimeout + " seconds. " +
                         "Consider increasing the server start timeout if this continues to occur. " +
                         "For example, " + getServerStartTimeoutExample());
+            } else {
+                serverFullyStarted.set(true);
             }
             // Check for port already in use error
             String portError = serverTask.findStringInFile(PORT_IN_USE_MESSAGE_PREFIX, messagesLogFile);
@@ -983,6 +990,25 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         }
     }
 
+    protected void detectFeaturesSh(List<String> dockerfileLines) {
+        // Reset features.sh warning flag
+        shownFeaturesShWarning.set(false);
+
+        final String FEATURES_SH_COMMAND_LOWERCASE = "run features.sh";
+        for (int i=0; i<dockerfileLines.size(); i++) {
+            String line = dockerfileLines.get(i);
+            // RUN command is case insensitive, so use lowercase matching.
+            if (line.toLowerCase().equals(FEATURES_SH_COMMAND_LOWERCASE)) {
+                debug("Detected RUN features.sh command.");
+                hasFeaturesSh.set(true);
+                return;
+            }
+        }
+        // if not detected, reset to false in case the Dockerfile is being rebuilt
+        debug("Did not find RUN features.sh command.");
+        hasFeaturesSh.set(false);
+    }
+
     protected void processCopyLines(List<String> dockerfileLines, String buildContext) throws PluginExecutionException {
         srcMount.clear();
         destMount.clear();
@@ -1091,6 +1117,7 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         dockerfileLines = getCombinedLines(dockerfileLines, escape);
         removeWarFileLines(dockerfileLines);
         processCopyLines(dockerfileLines, dockerfile.getParent());
+        detectFeaturesSh(dockerfileLines);
         disableOpenJ9SCC(dockerfileLines);
         for (String line : dockerfileLines) {
             debug(line);
@@ -1132,9 +1159,12 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
             sb.append("-f " + tempDockerfile + " -t " + imageName + " " + userDockerfile.getParent());
             String buildCmd = sb.toString();
             info(buildCmd);
+            if (hasFeaturesSh.get()) {
+                info("The RUN features.sh command is detected in the Dockerfile and extra time may be necessary when installing features.");
+            }
             long startTime = System.currentTimeMillis();
             execDockerCmdAndLog(getRunProcess(buildCmd), dockerBuildTimeout);
-            checkDockerIgnore(startTime, userDockerfile.getParentFile());
+            checkDockerBuildTime(startTime, userDockerfile.getParentFile());
             info("Completed building Docker image.");
         } catch (IllegalThreadStateException  e) {
             // the timeout was too short and the docker command has not yet completed.
@@ -1157,12 +1187,12 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
     }
 
     // Suggest a performance improvement if docker build takes too long.
-    private static final long DOCKER_BUILD_SOFT_TIMEOUT = 30000;
-    private void checkDockerIgnore(long startTime, File dockerBuildContext) {
+    private static final long DOCKER_BUILD_SOFT_TIMEOUT = 30000; // millis
+    private void checkDockerBuildTime(long startTime, File dockerBuildContext) {
         if (System.currentTimeMillis() - startTime < DOCKER_BUILD_SOFT_TIMEOUT) {
             return;
         }
-        debug("checkDockerIgnore, dockerBuildContext=" + dockerBuildContext.getAbsolutePath());
+        debug("checkDockerBuildTime, dockerBuildContext=" + dockerBuildContext.getAbsolutePath());
         File dockerIgnore = new File(dockerBuildContext, ".dockerignore");
         if (!dockerIgnore.exists()) { // provide some advice
             String buildContextPath;
@@ -1171,8 +1201,9 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
             } catch (IOException e) {
                 buildContextPath = dockerBuildContext.getAbsolutePath();
             }
-            warn("The docker build command is slower than expected. You may increase performance by adding " +
-                "unneeded files and directories such as any Liberty runtime directories to a .dockerignore file in " +
+            warn("The docker build command took longer than " + DOCKER_BUILD_SOFT_TIMEOUT / 1000 + " seconds. " +
+                "You may increase performance by adding unneeded files and directories " +
+                "such as any Liberty runtime directories to a .dockerignore file in " +
                 buildContextPath + ".");
         }
     }
@@ -1296,10 +1327,10 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
                             "Java classes were compiled with a higher version of Java than the JVM in the container. To resolve this issue, set the source and target Java versions in your Maven build to correspond to the Java version used in your Dockerfile or its parent image, then clean the project output and restart dev mode.",
                             false);
 
-                    // Look for features not available
-                    String errMsg = "Feature definitions were not found in the container. To install features to the container, specify 'RUN features.sh' in your Dockerfile. For an example of how to configure a Dockerfile, see https://github.com/OpenLiberty/ci.docker";
-                    if (!shownFeaturesShWarning) {
-                        shownFeaturesShWarning = alertOnServerError(line, "CWWKF0001E", errMsg, errMsg, true);
+                    // Look for features not available message during server startup if features.sh was not defined in Dockerfile
+                    if (!serverFullyStarted.get() && !hasFeaturesSh.get() && !shownFeaturesShWarning.get()) {
+                        String errMsg = "Feature definitions were not found in the container. To install features to the container, specify 'RUN features.sh' in your Dockerfile. For an example of how to configure a Dockerfile, see https://github.com/OpenLiberty/ci.docker";
+                        shownFeaturesShWarning.set(alertOnServerError(line, "CWWKF0001E", errMsg, errMsg, true));
                     }
                 }
             }
@@ -1347,6 +1378,8 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
 
     private void stopContainer() {
         try {
+            serverFullyStarted.set(false);
+
             // see if docker run command (container) is still running before trying to stop it.
             if (dockerRunProcess != null && dockerRunProcess.isAlive()) {
                 info("Stopping container...");
@@ -3687,20 +3720,8 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
      * @throws IOException unable to resolve canonical path
      */
     protected Set<File> getClassPath(List<String> artifactPaths, List<File> outputDirs) throws IOException {
-        List<URL> urls = new ArrayList<>();
-        ClassLoader c = Thread.currentThread().getContextClassLoader();
-        while (c != null) {
-            if (c instanceof URLClassLoader) {
-                urls.addAll(Arrays.asList(((URLClassLoader) c).getURLs()));
-            }
-            c = c.getParent();
-        }
-
         Set<String> parsedFiles = new HashSet<>();
         Deque<String> toParse = new ArrayDeque<>();
-        for (URL url : urls) {
-            toParse.add(new File(url.getPath()).getCanonicalPath());
-        }
 
         for (String artifactPath : artifactPaths) {
             toParse.add(new File(artifactPath).getCanonicalPath());
