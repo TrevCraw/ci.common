@@ -1786,15 +1786,20 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         }
         // suppress install feature warning
         System.setProperty(SKIP_BETA_INSTALL_WARNING, Boolean.TRUE.toString());
+        boolean generateFeaturesSuccess = false;
         if (generateFeatures) {
             //TODO: decide if we should do an optimized feature generation on a server restart
             // If we do not generate here, need to revisit compileDependenciesChanged section in DevMojo
-            optimizeGenerateFeatures();
+            debug("1322: Calling optimizeGenerateFeatures from DevUtil line 1794");
+            generateFeaturesSuccess = optimizeGenerateFeatures();
         }
         libertyCreate();
         // Skip installing features on container during restart, since the Dockerfile
         // should have 'RUN features.sh'
-        if (!container) {
+        // TODO: will features be generated before 'RUN features.sh'? - may not be necessary
+        // Install features if feature generation is off OR feature generation was successful
+        if (!container && (!generateFeatures || generateFeaturesSuccess)) {
+            debug("1322: Calling libertyInstallFeature from DevUtil line 1803");
             libertyInstallFeature();
         }
         libertyDeploy();
@@ -2432,8 +2437,9 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         generateFeatures = !generateFeatures;
         logFeatureGenerationStatus();
         if (generateFeatures) {
-            // If hotkey is toggled to “true”, generate features right away.
-            optimizeGenerateFeatures();
+            // If hotkey is toggled to “true”, optimize generate features right away.
+            debug("1322: Calling generateAndInstallFeatures(true); from DevUtil line 2442");
+            generateAndInstallFeatures(true);
         }
     }
 
@@ -2447,33 +2453,56 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
     }
 
     /**
+     * Generate features and then install features
+     */
+    private void generateAndInstallFeatures(boolean optimize) {
+        boolean generateFeaturesSuccess;
+        if (optimize) {
+            generateFeaturesSuccess = optimizeGenerateFeatures();
+        } else {
+            generateFeaturesSuccess = incrementGenerateFeatures();
+        }
+        if (generateFeaturesSuccess) {
+            try {
+                debug("1322: Calling libertyInstallFeature from DevUtil line 2463");
+                libertyInstallFeature();
+            } catch (PluginExecutionException e) {
+                error("Failed to install features after generating features", e);
+            }
+        };
+    }
+
+    /**
      * Generate features using all classes and only user specified features.
      */
-    private void optimizeGenerateFeatures() {
+    private boolean optimizeGenerateFeatures() {
         info("Generating optimized features list...");
         // scan all class files and provide only user specified features
-        boolean generatedFeatures = libertyGenerateFeatures(null, true);
-        if (generatedFeatures) {
+        boolean generateFeaturesSuccess = libertyGenerateFeatures(null, true);
+        if (generateFeaturesSuccess) {
             javaSourceClasses.clear();
-        } // do not need to log an error if generatedFeatures is false because that would
+        } // do not need to log an error if generateFeaturesSuccess is false because that would
           // have already been logged by libertyGenerateFeatures
+        return generateFeaturesSuccess;
     }
 
     /**
      * Generate features using updated classes and all existing features.
      */
-    private void incrementGenerateFeatures() {
+    private boolean incrementGenerateFeatures() {
         info("Generating feature list from incremental changes...");
+        boolean generateFeaturesSuccess = false;
         try {
             Collection<String> javaSourceClassPaths = getClassPaths(javaSourceClasses);
-            boolean generatedFeatures = libertyGenerateFeatures(javaSourceClassPaths, false);
-            if (generatedFeatures) {
+            generateFeaturesSuccess = libertyGenerateFeatures(javaSourceClassPaths, false);
+            if (generateFeaturesSuccess) {
                 javaSourceClasses.clear();
-            } // do not need to log an error if generatedFeatures is false because that would
+            } // do not need to log an error if generateFeaturesSuccess is false because that would
               // have already been logged by libertyGenerateFeatures
         } catch (IOException e) {
             error("An error occurred while trying to generate features: " + e.getMessage(), e);
         }
+        return generateFeaturesSuccess;
     }
 
     private class HotkeyReader implements Runnable {
@@ -2536,7 +2565,9 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
                         toggleFeatureGeneration();
                     } else if (o.isPressed(line)) {
                         if (generateFeatures) {
-                            optimizeGenerateFeatures();
+                            // optimize generate features
+                            debug("1322: Calling generateAndInstallFeatures(true); from DevUtil line 2570");
+                            generateAndInstallFeatures(true);
                         } else {
                             warn("Cannot optimize features because automatic generation of features is off.");
                             warn("To toggle the automatic generation of features, type 'g' and press Enter.");
@@ -2827,7 +2858,8 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
                         foundInitialClasses = true;
                         javaSourceClasses.clear();
                     } else {
-                        incrementGenerateFeatures();   
+                        debug("1322: Calling generateAndInstallFeatures(false);  from DevUtil line 2862");
+                        generateAndInstallFeatures(false); 
                     }
                 }
 
@@ -3072,6 +3104,10 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
      */
     public Collection<String> getJavaSourceClassPaths() throws IOException {
         return getClassPaths(javaSourceClasses);
+    }
+
+    public void clearJavaSourceClasses() {
+        javaSourceClasses.clear();
     }
 
     /**
@@ -3995,14 +4031,17 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
             // This is for server.xml specified by the configuration parameter
             // server will load new properties
             if (fileChanged.exists() && (changeType == ChangeType.MODIFY || changeType == ChangeType.CREATE)) {
-                // suppress install feature warning - property must be set before calling copyConfigFolder
-                System.setProperty(SKIP_BETA_INSTALL_WARNING, Boolean.TRUE.toString());
-                copyConfigFolder(fileChanged, serverXmlFileParent, "server.xml");
-                copyFile(fileChanged, serverXmlFileParent, serverDirectory, "server.xml");
                 if (generateFeatures) {
                     // custom server.xml modified
+                    debug("1322: Calling incrementGenerateFeatures from DevUtil line 4006");
                     incrementGenerateFeatures();
                 }
+                // suppress install feature warning - property must be set before calling copyConfigFolder
+                System.setProperty(SKIP_BETA_INSTALL_WARNING, Boolean.TRUE.toString());
+                // copyConfigFolder will install features if new ones are detected
+                copyConfigFolder(fileChanged, serverXmlFileParent, "server.xml");
+                copyFile(fileChanged, serverXmlFileParent, serverDirectory, "server.xml");
+                
                 if (isDockerfileDirectoryChanged(serverDirectory, fileChanged)) {
                     untrackDockerfileDirectoriesAndRestart();
                 } else if (changeType == ChangeType.CREATE) {
@@ -4016,8 +4055,10 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
                 deleteFile(fileChanged, configDirectory, serverDirectory, "server.xml");
                 if (generateFeatures) {
                     // TODO: test this scenario and decide if generating features is necessary
+                    // if generate features is necessary, it should probably be an optimize call
                     // custom server.xml is deleted
-                    incrementGenerateFeatures();
+                    debug("1322: Calling generateAndInstallFeatures(true); from DevUtil line 4057");
+                    generateAndInstallFeatures(true);
                 }
                 // Let this restart if needed for container mode.  Otherwise, nothing else needs to be done for config file delete.
                 if (isDockerfileDirectoryChanged(serverDirectory, fileChanged)) {
@@ -4029,20 +4070,21 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
         } else if (directory.startsWith(configPath)
                 && !isGeneratedConfigFile(fileChanged, configDirectory, serverDirectory)) { // config
                                                                                             // files
-            if (fileChanged.exists() && (changeType == ChangeType.MODIFY
-                    || changeType == ChangeType.CREATE)) {
+            if (fileChanged.exists() && (changeType == ChangeType.MODIFY || changeType == ChangeType.CREATE)) {
+                if ((fileChanged.getName().equals("server.xml")) && serverXmlFileParent == null && generateFeatures) {
+                    // server.xml modified
+                    debug("1322: Calling incrementGenerateFeatures from DevUtil line 4072");
+                    incrementGenerateFeatures();
+                }
                 // suppress install feature warning - property must be set before calling copyConfigFolder
                 System.setProperty(SKIP_BETA_INSTALL_WARNING, Boolean.TRUE.toString());
+                // copyConfigFolder will install features if new ones are detected
                 copyConfigFolder(fileChanged, configDirectory, null);
                 copyFile(fileChanged, configDirectory, serverDirectory, null);
 
                 if (isDockerfileDirectoryChanged(serverDirectory, fileChanged)) {
                     untrackDockerfileDirectoriesAndRestart();
                 } else {
-                    if ((fileChanged.getName().equals("server.xml")) && serverXmlFileParent == null && generateFeatures) {
-                        // server.xml modified
-                        incrementGenerateFeatures();
-                    }
                     if (changeType == ChangeType.CREATE) {
                         redeployApp();
                     }
@@ -4060,15 +4102,17 @@ public abstract class DevUtil extends AbstractContainerSupportUtil {
             } else if (changeType == ChangeType.DELETE) {
                 info("Config file deleted: " + fileChanged.getName());
                 deleteFile(fileChanged, configDirectory, serverDirectory, null);
+                if ((fileChanged.getName().equals("server.xml")) && serverXmlFileParent == null && generateFeatures) {
+                    // TODO: test this scenario and decide if generating features is necessary
+                    // if generate features is necessary, it should probably be an optimize call
+                    // server.xml is deleted
+                    debug("1322: Calling generateAndInstallFeatures(true); from DevUtil line 4106");
+                    generateAndInstallFeatures(true);
+                }
                 if (isDockerfileDirectoryChanged(serverDirectory, fileChanged)) {
                     untrackDockerfileDirectoriesAndRestart();
                 } else {
-                    // TODO Can server.xml be removed?
-                    if ((fileChanged.getName().equals("server.xml")) && serverXmlFileParent == null && generateFeatures) {
-                        // TODO: test this scenario and decide if generating features is necessary
-                        // server.xml is deleted
-                        incrementGenerateFeatures();
-                    } else if (fileChanged.getName().equals("server.env")) {
+                     if (fileChanged.getName().equals("server.env")) {
                         // re-enable debug variables in server.env
                         enableServerDebug(false);
                     }
